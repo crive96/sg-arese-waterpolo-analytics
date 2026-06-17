@@ -694,19 +694,40 @@ def comparison_page(data: dict[str, pd.DataFrame]) -> None:
     with c1:
         st.dataframe(format_table(kpi_df), use_container_width=True, hide_index=True, height=470)
     with c2:
-        radar_cols = ["gol_tot", "assist_tot", "palla_rubata_tot", "pct_tiri_stagionale", "valutazione_grezza_media"]
-        radar_labels = ["Gol", "Assist", "Rubate", "% tiro", "Val. media"]
-        radar_source = movement[["giocatore"] + radar_cols].copy()
-        for col in radar_cols:
-            max_value = radar_source[col].max()
-            radar_source[col] = radar_source[col] / max_value * 100 if max_value else 0
-        a_norm = radar_source[radar_source["giocatore"] == player_a].iloc[0]
-        b_norm = radar_source[radar_source["giocatore"] == player_b].iloc[0]
+        radar_source = movement.copy()
+        radar_source["disciplina_media"] = radar_source[["controfallo_media", "errore_media"]].fillna(0).sum(axis=1)
+        radar_metrics = [
+            ("Gol/partita", "gol_media", "positive"),
+            ("Assist/partita", "assist_media", "positive"),
+            ("% tiro", "pct_tiri_stagionale", "positive"),
+            ("Rubate/partita", "palla_rubata_media", "positive"),
+            ("ET+/partita", "et_pos_media", "positive"),
+            ("TR+/partita", "tr_pos_media", "positive"),
+            ("Val. media", "valutazione_grezza_media", "positive"),
+            ("Indice", "indice_valutazione_0_100", "positive"),
+            ("Protezione palla", "palla_persa_media", "inverse"),
+            ("Disciplina", "disciplina_media", "inverse"),
+        ]
+
+        def normalized_radar_values(player: str) -> list[float]:
+            player_row = radar_source[radar_source["giocatore"] == player].iloc[0]
+            values = []
+            for _, col, direction in radar_metrics:
+                raw_value = player_row[col]
+                scale = radar_source[col].abs().max()
+                scale = scale if scale and pd.notna(scale) else 1
+                normalized = raw_value / scale * 100 if pd.notna(raw_value) else 0
+                if direction == "inverse":
+                    normalized = 100 - normalized
+                values.append(max(0, min(100, float(normalized))))
+            return values
+
+        radar_labels = [label for label, _, _ in radar_metrics]
         fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(r=[a_norm[c] for c in radar_cols], theta=radar_labels, fill="toself", name=player_a, line={"color": ARESE_CYAN}))
-        fig.add_trace(go.Scatterpolar(r=[b_norm[c] for c in radar_cols], theta=radar_labels, fill="toself", name=player_b, line={"color": ARESE_ORANGE}))
-        fig.update_layout(polar={"radialaxis": {"visible": True, "range": [0, 100]}}, title="Radar normalizzato sul gruppo movimento")
-        st.plotly_chart(styled_plotly(fig, 470), use_container_width=True)
+        fig.add_trace(go.Scatterpolar(r=normalized_radar_values(player_a), theta=radar_labels, fill="toself", name=player_a, line={"color": ARESE_CYAN}))
+        fig.add_trace(go.Scatterpolar(r=normalized_radar_values(player_b), theta=radar_labels, fill="toself", name=player_b, line={"color": ARESE_ORANGE}))
+        fig.update_layout(polar={"radialaxis": {"visible": True, "range": [0, 100]}}, title="Profilo normalizzato sul gruppo movimento")
+        st.plotly_chart(styled_plotly(fig, 560), use_container_width=True)
 
     detail = matches[matches["giocatore"].isin([player_a, player_b])].merge(
         evaluations[["match_id", "giocatore", "valutazione_finale"]], on=["match_id", "giocatore"], how="left"
