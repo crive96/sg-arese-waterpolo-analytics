@@ -206,6 +206,13 @@ def format_pct(value: float | int | None) -> str:
     return f"{value:.1%}"
 
 
+def mean_pct(series: pd.Series) -> float | None:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.mean())
+
+
 def format_num(value: float | int | None, decimals: int = 1) -> str:
     if value is None or pd.isna(value):
         return "-"
@@ -235,6 +242,26 @@ def metric_card(label: str, value: str, note: str = "") -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def team_special_situations(matches: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "giornata",
+        "data",
+        "avversario",
+        "casa_trasferta",
+        "esito",
+        "gol_fatti",
+        "gol_subiti",
+        "pct_et_pos",
+        "pct_et_neg",
+        "pct_tr_pos",
+        "pct_tr_neg",
+        "tr_plus_team",
+        "tr_minus_team",
+        "palla_al_centro",
+    ]
+    return matches[[col for col in cols if col in matches.columns]].sort_values("giornata").copy()
 
 
 def hero(title: str, subtitle: str, kicker: str = "SG Arese Waterpolo Analytics") -> None:
@@ -419,6 +446,7 @@ def style_results_table(df: pd.DataFrame) -> pd.io.formats.style.Styler:
 
 def overview_page(data: dict[str, pd.DataFrame]) -> None:
     matches = data["Partite"]
+    team_match = data["Squadra_Partita"]
     players = data["Giocatori_Stagione"]
     movement = players[players["ruolo"] == "movimento"].copy()
     hero(
@@ -440,6 +468,15 @@ def overview_page(data: dict[str, pd.DataFrame]) -> None:
         metric_card("Diff. reti", format_num(matches["diff"].sum(), 0), "stagione completa")
     with cols[4]:
         metric_card("Punti", format_num(matches["punti"].sum(), 0), "classifica Arese")
+
+    special = team_special_situations(team_match)
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        metric_card("% ET+", format_pct(mean_pct(special["pct_et_pos"])), "media dati disponibili")
+    with s2:
+        metric_card("% ET-", format_pct(mean_pct(special["pct_et_neg"])), "media dati disponibili")
+    with s3:
+        metric_card("Palle al centro", format_num(special["palla_al_centro"].sum(), 0), "totale rilevato")
 
     left, right = st.columns([1.45, 1])
     with left:
@@ -487,7 +524,7 @@ def team_page(data: dict[str, pd.DataFrame]) -> None:
     team_match = data["Squadra_Partita"]
     hero("Squadra", "Andamento risultati, split casa/trasferta, punti cumulati e quarti disponibili.")
 
-    tabs = st.tabs(["Timeline", "Split", "Quarti", "Statistiche Team"])
+    tabs = st.tabs(["Timeline", "Split", "Quarti", "Superiorità & Rigori", "Statistiche Team"])
     with tabs[0]:
         fig = px.bar(
             matches.sort_values("giornata"),
@@ -522,6 +559,43 @@ def team_page(data: dict[str, pd.DataFrame]) -> None:
         fig = px.bar(quarter_df, x="quarto", y=["GF", "GS"], barmode="group", title="Rendimento per quarti", color_discrete_sequence=[ARESE_CYAN, ARESE_ORANGE])
         st.plotly_chart(styled_plotly(fig), use_container_width=True)
     with tabs[3]:
+        special = team_special_situations(team_match)
+        k1, k2, k3, k4, k5 = st.columns(5)
+        with k1:
+            metric_card("% ET+", format_pct(mean_pct(special["pct_et_pos"])), "realizzate")
+        with k2:
+            metric_card("% ET-", format_pct(mean_pct(special["pct_et_neg"])), "subite")
+        with k3:
+            metric_card("% TR+", format_pct(mean_pct(special["pct_tr_pos"])), "realizzati")
+        with k4:
+            metric_card("% TR-", format_pct(mean_pct(special["pct_tr_neg"])), "subiti")
+        with k5:
+            metric_card("Palle al centro", format_num(special["palla_al_centro"].sum(), 0), "totale")
+
+        pct_long = special.melt(
+            id_vars=["giornata", "avversario"],
+            value_vars=["pct_et_pos", "pct_et_neg", "pct_tr_pos", "pct_tr_neg"],
+            var_name="metrica",
+            value_name="percentuale",
+        ).dropna(subset=["percentuale"])
+        label_map = {"pct_et_pos": "% ET+", "pct_et_neg": "% ET-", "pct_tr_pos": "% TR+", "pct_tr_neg": "% TR-"}
+        pct_long["metrica"] = pct_long["metrica"].map(label_map)
+        fig = px.line(pct_long, x="giornata", y="percentuale", color="metrica", markers=True, title="Percentuali ET/TR per giornata", color_discrete_sequence=[ARESE_CYAN, ARESE_ORANGE, ARESE_AQUA, ARESE_GOLD])
+        fig.update_traces(line={"width": 4}, marker={"size": 8})
+        fig.update_yaxes(tickformat=".0%")
+        st.plotly_chart(styled_plotly(fig, 500), use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            fig = px.bar(special, x="giornata", y="palla_al_centro", title="Palle al centro per giornata", color="esito", color_discrete_map=RESULT_COLOR_MAP, hover_data=["avversario"])
+            st.plotly_chart(styled_plotly(fig, 420), use_container_width=True)
+        with c2:
+            fig = px.bar(special, x="giornata", y=["tr_plus_team", "tr_minus_team"], barmode="group", title="Rigori squadra: TR+ e TR-", color_discrete_sequence=[ARESE_CYAN, ARESE_ORANGE])
+            st.plotly_chart(styled_plotly(fig, 420), use_container_width=True)
+
+        st.caption("Le medie percentuali sono calcolate solo sulle partite con dato disponibile.")
+        st.dataframe(format_table(special), use_container_width=True, hide_index=True, height=520)
+    with tabs[4]:
         st.dataframe(format_table(team_match.sort_values("giornata")), use_container_width=True, hide_index=True)
 
 
@@ -554,7 +628,7 @@ def players_page(data: dict[str, pd.DataFrame]) -> None:
     with c4:
         metric_card("% tiro stagionale", format_pct(filtered["gol_tot"].sum() / filtered["tiri_tot"].sum() if filtered["tiri_tot"].sum() else None), "gol / tiri")
 
-    tab1, tab2, tab3 = st.tabs(["Top KPI", "Scatter rapidi", "Tabella"])
+    tab1, tab2, tab3, tab4 = st.tabs(["Top KPI", "Scatter rapidi", "ET / Rigori", "Tabella"])
     with tab1:
         a, b = st.columns(2)
         with a:
@@ -568,6 +642,18 @@ def players_page(data: dict[str, pd.DataFrame]) -> None:
         st.plotly_chart(scatter_players(filtered, "gol_tot", "assist_tot", "partite_nel_foglio", "ruolo_base", "Produzione offensiva: gol vs assist", ["pct_tiri_stagionale", "valutazione_grezza_totale"], selected_player=selected_profile), use_container_width=True)
         st.plotly_chart(scatter_players(filtered, "pct_tiri_media", "pct_tiri_stagionale", "tiri_tot", "mano", "Consistenza vs efficienza tiro", ["gol_tot", "assist_tot", "partite_nel_foglio"], selected_player=selected_profile), use_container_width=True)
     with tab3:
+        a, b = st.columns(2)
+        with a:
+            st.plotly_chart(plot_bar(filtered.sort_values("et_pos_tot", ascending=False), "giocatore", "et_pos_tot", "ET+ conquistate/realizzate", "ruolo_base", 10, height=420, selected_player=selected_profile), use_container_width=True)
+            st.plotly_chart(plot_bar(filtered.sort_values("tr_pos_tot", ascending=False), "giocatore", "tr_pos_tot", "TR+ conquistati/realizzati", "ruolo_base", 10, height=420, selected_player=selected_profile), use_container_width=True)
+        with b:
+            st.plotly_chart(plot_bar(filtered.sort_values("et_neg_tot", ascending=False), "giocatore", "et_neg_tot", "ET- subite/concesse", "ruolo_base", 10, height=420, selected_player=selected_profile), use_container_width=True)
+            st.plotly_chart(plot_bar(filtered.sort_values("tr_neg_tot", ascending=False), "giocatore", "tr_neg_tot", "TR- subiti/concessi", "ruolo_base", 10, height=420, selected_player=selected_profile), use_container_width=True)
+        st.plotly_chart(scatter_players(filtered, "et_pos_tot", "et_neg_tot", "partite_nel_foglio", "ruolo_base", "ET+: conquistate vs subite", ["et_pos_media", "et_neg_media", "valutazione_grezza_totale"], selected_player=selected_profile), use_container_width=True)
+        st.plotly_chart(scatter_players(filtered, "tr_pos_tot", "tr_neg_tot", "partite_nel_foglio", "ruolo_base", "Rigori: TR+ vs TR-", ["tr_pos_media", "tr_neg_media", "valutazione_grezza_totale"], selected_player=selected_profile), use_container_width=True)
+        et_cols = ["giocatore", "ruolo_label", "partite_nel_foglio", "et_pos_tot", "et_pos_media", "et_neg_tot", "et_neg_media", "tr_pos_tot", "tr_pos_media", "tr_neg_tot", "tr_neg_media", "valutazione_grezza_media"]
+        st.dataframe(format_table(filtered[et_cols].sort_values(["et_pos_tot", "tr_pos_tot"], ascending=False)), use_container_width=True, hide_index=True, height=420)
+    with tab4:
         cols = ["giocatore", "ruolo_label", "mano", "jolly", "partite_nel_foglio", "gol_tot", "assist_tot", "tiri_tot", "pct_tiri_media", "pct_tiri_stagionale", "palla_rubata_tot", "palla_persa_tot", "valutazione_grezza_totale", "valutazione_grezza_media", "indice_valutazione_0_100"]
         table = filtered[cols].sort_values("indice_valutazione_0_100", ascending=False)
         st.dataframe(format_table(table), use_container_width=True, hide_index=True, height=640)
@@ -673,6 +759,10 @@ def player_profile_page(data: dict[str, pd.DataFrame]) -> None:
             ("Gol", format_num(row["gol_tot"], 0), f"{format_num(row['gol_media'], 2)} / partita"),
             ("Assist", format_num(row["assist_tot"], 0), f"{format_num(row['assist_media'], 2)} / partita"),
             ("Tiri", format_num(row["tiri_tot"], 0), f"{format_num(row['tiri_media'], 2)} / partita"),
+            ("ET+", format_num(row["et_pos_tot"], 0), f"{format_num(row['et_pos_media'], 2)} / partita"),
+            ("ET-", format_num(row["et_neg_tot"], 0), f"{format_num(row['et_neg_media'], 2)} / partita"),
+            ("TR+", format_num(row["tr_pos_tot"], 0), f"{format_num(row['tr_pos_media'], 2)} / partita"),
+            ("TR-", format_num(row["tr_neg_tot"], 0), f"{format_num(row['tr_neg_media'], 2)} / partita"),
             ("% tiro media", format_pct(row["pct_tiri_media"]), "partita-per-partita"),
             ("% tiro stagionale", format_pct(row["pct_tiri_stagionale"]), "gol / tiri"),
             ("Val. media", format_num(row["valutazione_grezza_media"], 2), "grezza"),
@@ -684,6 +774,10 @@ def player_profile_page(data: dict[str, pd.DataFrame]) -> None:
             ("Tiri/partita", "tiri_media"),
             ("% tiro media", "pct_tiri_media"),
             ("% tiro stagionale", "pct_tiri_stagionale"),
+            ("ET+/partita", "et_pos_media"),
+            ("ET-/partita", "et_neg_media"),
+            ("TR+/partita", "tr_pos_media"),
+            ("TR-/partita", "tr_neg_media"),
             ("Rubate/partita", "palla_rubata_media"),
             ("Perse/partita", "palla_persa_media"),
             ("Valutazione media", "valutazione_grezza_media"),
@@ -739,7 +833,7 @@ def player_profile_page(data: dict[str, pd.DataFrame]) -> None:
         detail_cols = ["giornata", "data", "avversario", "parata", "gol_subito", "pct_parate", "assist", "errore", "valutazione_finale"]
     else:
         fig = px.line(detail, x="giornata", y=["gol", "assist", "tiri", "valutazione_finale"], markers=True, title="Andamento partita-per-partita", color_discrete_sequence=[ARESE_CYAN, ARESE_ORANGE, ARESE_AQUA, ARESE_GOLD])
-        detail_cols = ["giornata", "data", "avversario", "gol", "assist", "tiri", "pct_tiri", "palla_rubata", "palla_persa", "errore", "valutazione_finale"]
+        detail_cols = ["giornata", "data", "avversario", "gol", "assist", "tiri", "pct_tiri", "et_pos", "et_neg", "tr_pos", "tr_neg", "palla_rubata", "palla_persa", "errore", "valutazione_finale"]
     fig.update_traces(line={"width": 4}, marker={"size": 8})
     st.plotly_chart(styled_plotly(fig, 470), use_container_width=True)
     st.dataframe(format_table(detail[detail_cols]), use_container_width=True, hide_index=True, height=520)
@@ -758,7 +852,7 @@ def scatter_lab_page(data: dict[str, pd.DataFrame]) -> None:
         base = players.copy()
 
     numeric_cols = [col for col in base.columns if pd.api.types.is_numeric_dtype(base[col])]
-    preferred = [col for col in ["gol_tot", "assist_tot", "tiri_tot", "pct_tiri_media", "pct_tiri_stagionale", "valutazione_grezza_totale", "valutazione_grezza_media", "indice_valutazione_0_100", "rischio_tot", "impatto_positivo", "azioni_positive_difesa", "parata_tot", "gol_subito_tot", "pct_parate_media"] if col in numeric_cols]
+    preferred = [col for col in ["gol_tot", "assist_tot", "tiri_tot", "pct_tiri_media", "pct_tiri_stagionale", "et_pos_tot", "et_neg_tot", "tr_pos_tot", "tr_neg_tot", "valutazione_grezza_totale", "valutazione_grezza_media", "indice_valutazione_0_100", "rischio_tot", "impatto_positivo", "azioni_positive_difesa", "parata_tot", "gol_subito_tot", "pct_parate_media"] if col in numeric_cols]
     numeric_cols = preferred + [col for col in numeric_cols if col not in preferred]
 
     c1, c2, c3, c4 = st.columns(4)
@@ -783,6 +877,8 @@ def scatter_lab_page(data: dict[str, pd.DataFrame]) -> None:
         "Impatto totale vs medio": ("valutazione_grezza_totale", "valutazione_grezza_media", "partite_nel_foglio", "ruolo_base"),
         "Rischio vs rendimento": ("rischio_tot", "impatto_positivo", "valutazione_grezza_totale", "ruolo_base"),
         "Difesa vs attacco": ("azioni_positive_difesa", "produzione_offensiva", "indice_valutazione_0_100", "jolly"),
+        "ET conquistate vs subite": ("et_pos_tot", "et_neg_tot", "partite_nel_foglio", "ruolo_base"),
+        "Rigori conquistati vs subiti": ("tr_pos_tot", "tr_neg_tot", "partite_nel_foglio", "ruolo_base"),
     }
     cols = st.columns(3)
     for idx, (label, values) in enumerate(presets.items()):
